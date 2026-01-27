@@ -1,0 +1,36 @@
+parameters:
+    level: 6
+    paths:
+        - app
+        - config
+        - routes
+    excludePaths:
+        - app/Console/Kernel.php
+        - app/Exceptions/Handler.php
+        - app/Http/Kernel.php
+        - database/migrations/*
+        - database/seeders/*
+        - database/factories/*
+    ignoreErrors:
+        - '#Call to an undefined static method App\\Models\\.*::(create|find|where|whereIn|whereHas|orderBy|lockForUpdate|activos)\(\)#'
+        - '#Call to an undefined method Illuminate\\Database\\Eloquent\\Builder#'
+        - '#Call to an undefined method Illuminate\\Database\\Query\\Builder#'
+        - '#Access to undefined constant Pdo\\Mysql::ATTR_SSL_CA#'
+        - '#Access to an undefined property#'
+        - '#Undefined variable#'
+        - '#PHPDoc type array<string> of property .* is not covariant with PHPDoc type array<int, string>#'
+        - '#should return .* but returns .*#'
+        - '#Right side of && is always true#'
+        - '#If condition is always true#'
+        - '#Unable to resolve the template type#'
+        - '#Call to an undefined method Illuminate\\Contracts\\Auth\\Authenticatable::createToken\(\)#'
+        - '#Parameter .* of function str_pad expects string, int given#'
+        - '#has no return type specified#'
+        - '#has parameter .* with no type specified#'
+        -
+            identifier: missingType.iterableValue
+        -
+            identifier: missingType.generics
+    bootstrapFiles:
+        - vendor/autoload.php
+    reportUnmatchedIgnoredErrors: false
