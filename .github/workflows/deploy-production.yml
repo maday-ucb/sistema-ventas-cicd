@@ -1,0 +1,365 @@
+name: Deploy to Production
+
+on:
+  # Trigger after successful build on main
+  workflow_run:
+    workflows: ["Build & Release"]
+    types: [completed]
+    branches: [main, tp02]
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy (e.g., v1.0.0-20260114-164500)"
+        required: true
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  ENVIRONMENT: production
+  HEALTH_CHECK_TIMEOUT: 60
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: self-hosted
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'tp02'))
+
+    # REQUIRES MANUAL APPROVAL
+    environment: production
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Get Release Tag
+        id: release
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+          else
+            # Get latest release from main (non-prerelease)
+            RELEASE_TAG=$(gh release list --limit 10 | grep -v 'Pre-release' | grep -v 'develop' | head -1 | awk '{print $1}' || echo "")
+            if [ -z "$RELEASE_TAG" ]; then
+              echo "No production release found"
+              exit 1
+            fi
+          fi
+          echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          echo "📦 Deploying release: ${RELEASE_TAG}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Display Deployment Info
+        run: |
+          echo "## 🚀 Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> [!CAUTION]" >> $GITHUB_STEP_SUMMARY
+          echo "> This is a PRODUCTION deployment (Self-Hosted)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Release** | \`${{ steps.release.outputs.release_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | production |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Approved by** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -Iseconds) |" >> $GITHUB_STEP_SUMMARY
+
+      # Pre-deploy checks
+      - name: Pre-Deploy Checks
+        run: |
+          set -e
+          echo "🔍 Running pre-deploy checks..."
+          echo "📁 PROD_PATH: ${{ secrets.PROD_PATH }}"
+
+          # Verify PROD_PATH is set
+          if [ -z "${{ secrets.PROD_PATH }}" ]; then
+            echo "❌ PROD_PATH secret is not configured"
+            exit 1
+          fi
+
+          # Debug environment
+          echo "Runner user: $(whoami)"
+
+          # Check if base directory exists
+          if [ ! -d "${{ secrets.PROD_PATH }}" ]; then
+            echo "❌ Production directory not found: ${{ secrets.PROD_PATH }}"
+            ls -ld /var/www/sistema-ventas-production 2>/dev/null || echo "Base folder /var/www/sistema-ventas-production also not found"
+            exit 1
+          fi
+
+          AVAILABLE=$(df -BG ${{ secrets.PROD_PATH }} | awk 'NR==2 {print $4}' | sed 's/G//')
+          if [ "$AVAILABLE" -lt 2 ]; then
+            echo "❌ Insufficient disk space: ${AVAILABLE}GB"
+            exit 1
+          fi
+          echo "✅ Disk space: ${AVAILABLE}GB"
+
+          # Create shared directory structure if not exists
+          if [ ! -d "${{ secrets.PROD_PATH }}/shared" ]; then
+            echo "📁 Creating shared directory..."
+            mkdir -p "${{ secrets.PROD_PATH }}/shared/storage/app/public"
+            mkdir -p "${{ secrets.PROD_PATH }}/shared/storage/framework/cache"
+            mkdir -p "${{ secrets.PROD_PATH }}/shared/storage/framework/sessions"
+            mkdir -p "${{ secrets.PROD_PATH }}/shared/storage/framework/views"
+            mkdir -p "${{ secrets.PROD_PATH }}/shared/storage/logs"
+            if sudo -n true 2>/dev/null; then
+              sudo chown -R www-data:www-data "${{ secrets.PROD_PATH }}/shared"
+            fi
+            echo "✅ Shared directory created"
+          else
+            echo "✅ Shared directory exists"
+          fi
+
+          # Create releases directory if not exists
+          if [ ! -d "${{ secrets.PROD_PATH }}/releases" ]; then
+            echo "📁 Creating releases directory..."
+            mkdir -p "${{ secrets.PROD_PATH }}/releases"
+            if sudo -n true 2>/dev/null; then
+              sudo chown -R $USER:www-data "${{ secrets.PROD_PATH }}/releases"
+            fi
+            echo "✅ Releases directory created"
+          fi
+
+          # Create .env file from secrets
+          echo "📝 Creating .env file from secrets..."
+          ENV_FILE="${{ secrets.PROD_PATH }}/shared/.env"
+          echo 'APP_NAME="Sistema Ventas"' > "$ENV_FILE"
+          echo 'APP_ENV=production' >> "$ENV_FILE"
+          echo 'APP_KEY=${{ secrets.APP_KEY }}' >> "$ENV_FILE"
+          echo 'APP_DEBUG=false' >> "$ENV_FILE"
+          echo 'APP_URL=${{ secrets.PROD_URL }}' >> "$ENV_FILE"
+          echo '' >> "$ENV_FILE"
+          echo 'LOG_CHANNEL=stack' >> "$ENV_FILE"
+          echo 'LOG_LEVEL=error' >> "$ENV_FILE"
+          echo '' >> "$ENV_FILE"
+          echo 'DB_CONNECTION=pgsql' >> "$ENV_FILE"
+          echo 'DB_HOST=127.0.0.1' >> "$ENV_FILE"
+          echo 'DB_PORT=5432' >> "$ENV_FILE"
+          echo 'DB_DATABASE=sistema_ventas_production' >> "$ENV_FILE"
+          echo 'DB_USERNAME=postgres' >> "$ENV_FILE"
+          echo 'DB_PASSWORD=${{ secrets.DB_PASSWORD }}' >> "$ENV_FILE"
+          echo '' >> "$ENV_FILE"
+          echo 'BROADCAST_DRIVER=log' >> "$ENV_FILE"
+          echo 'CACHE_DRIVER=file' >> "$ENV_FILE"
+          echo 'FILESYSTEM_DISK=local' >> "$ENV_FILE"
+          echo 'QUEUE_CONNECTION=sync' >> "$ENV_FILE"
+          echo 'SESSION_DRIVER=file' >> "$ENV_FILE"
+          echo 'SESSION_LIFETIME=120' >> "$ENV_FILE"
+          echo "✅ .env configured"
+
+      # Enable maintenance mode
+      - name: Enable Maintenance Mode
+        run: |
+          cd ${{ secrets.PROD_PATH }}/current 2>/dev/null || exit 0
+          php artisan down --retry=60 --refresh=5 || true
+          echo "🔧 Maintenance mode enabled"
+
+      # Deploy
+      - name: Deploy Application
+        timeout-minutes: 15
+        run: |
+          set -e
+          cd ${{ secrets.PROD_PATH }}
+
+          RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          RELEASE_DIR="releases/${TIMESTAMP}"
+
+          echo "📦 Downloading release: ${RELEASE_TAG}"
+
+          ARTIFACT_NAME="sistema-ventas-${RELEASE_TAG}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${ARTIFACT_NAME}.tar.gz"
+
+          mkdir -p "/tmp/deploy-${TIMESTAMP}"
+          curl -fsSL -o "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz" "$DOWNLOAD_URL"
+
+          # Download and verify checksum
+          curl -fsSL -o "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz.sha256" "${DOWNLOAD_URL}.sha256" || true
+          if [ -f "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz.sha256" ]; then
+            cd "/tmp/deploy-${TIMESTAMP}"
+            sha256sum -c "${ARTIFACT_NAME}.tar.gz.sha256" || exit 1
+            echo "✅ Checksum verified"
+          fi
+
+          cd ${{ secrets.PROD_PATH }}
+
+          echo "📂 Extracting to ${RELEASE_DIR}"
+          mkdir -p "${RELEASE_DIR}"
+          tar -xzf "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz" -C "${RELEASE_DIR}"
+
+          echo "🔗 Creating symlinks"
+          rm -rf "${RELEASE_DIR}/storage"
+          ln -sfn "$(pwd)/shared/storage" "${RELEASE_DIR}/storage"
+          ln -sfn "$(pwd)/shared/.env" "${RELEASE_DIR}/.env"
+
+          # Ensure storage directories exist with proper permissions
+          echo "📁 Ensuring storage structure exists"
+          mkdir -p shared/storage/app/public
+          mkdir -p shared/storage/framework/cache/data
+          mkdir -p shared/storage/framework/sessions
+          mkdir -p shared/storage/framework/views
+          mkdir -p shared/storage/logs
+
+          # Clear Laravel caches before setting permissions
+          echo "🧹 Clearing caches before permission changes"
+          cd "${RELEASE_DIR}"
+          php artisan cache:clear --quiet || true
+          php artisan view:clear --quiet || true
+          php artisan config:clear --quiet || true
+          cd ${{ secrets.PROD_PATH }}
+
+          # Set permissions with better error handling
+          echo "🔒 Setting permissions (skipping files in use)"
+          if sudo -n true 2>/dev/null; then
+            sudo chown -R $USER:www-data shared/storage 2>/dev/null || true
+            sudo find shared/storage -type d -exec chmod 775 {} \; 2>/dev/null || true
+            sudo find shared/storage -type f -exec chmod 664 {} \; 2>/dev/null || true
+          else
+            chown -R $USER:www-data shared/storage 2>/dev/null || true
+            find shared/storage -type d -exec chmod 775 {} \; 2>/dev/null || true
+            find shared/storage -type f -exec chmod 664 {} \; 2>/dev/null || true
+          fi
+
+          # Create bootstrap/cache if not exists
+          mkdir -p "${RELEASE_DIR}/bootstrap/cache"
+          chmod -R 775 "${RELEASE_DIR}/bootstrap/cache"
+
+          echo "🔒 Setting permissions"
+          # Try with sudo first, fall back to regular commands if sudo not available
+          if sudo -n true 2>/dev/null; then
+            sudo chown -R $USER:www-data "${RELEASE_DIR}"
+            sudo find "${RELEASE_DIR}" -type f -exec chmod 664 {} \; 2>/dev/null || true
+            sudo find "${RELEASE_DIR}" -type d -exec chmod 775 {} \; 2>/dev/null || true
+            sudo chmod -R 775 "${RELEASE_DIR}/bootstrap/cache" 2>/dev/null || true
+          else
+            echo "⚠️ sudo not available, setting permissions without sudo"
+            chown -R $USER:www-data "${RELEASE_DIR}" 2>/dev/null || true
+            find "${RELEASE_DIR}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+            find "${RELEASE_DIR}" -type d -exec chmod 755 {} \; 2>/dev/null || true
+            chmod -R 775 "${RELEASE_DIR}/bootstrap/cache" 2>/dev/null || true
+          fi
+
+          echo "🗃️ Creating database backup"
+          mkdir -p shared/database/backups
+          if command -v pg_dump &> /dev/null; then
+            source shared/.env
+            PGPASSWORD="$DB_PASSWORD" pg_dump -h "$DB_HOST" -U "$DB_USERNAME" -Fc "$DB_DATABASE" > "shared/database/backups/pre-${TIMESTAMP}.sql" 2>/dev/null || echo "Backup skipped"
+          fi
+
+          echo "🔄 Running migrations"
+          cd "${RELEASE_DIR}"
+          php artisan config:clear
+          php artisan migrate --force
+
+          echo "⚡ Atomic switch"
+          cd ${{ secrets.PROD_PATH }}
+
+          # Save previous release for rollback
+          PREVIOUS=$(readlink -f current 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS" ]; then
+            echo "$PREVIOUS" > shared/.previous_release
+          fi
+
+          ln -sfn "$(pwd)/${RELEASE_DIR}" current.new
+          mv -Tf current.new current
+
+          echo "🔃 Reloading services"
+          if sudo -n true 2>/dev/null; then
+            sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.2-fpm || true
+            sudo nginx -s reload || true
+            sudo supervisorctl restart sistema-ventas-worker:* 2>/dev/null || true
+          else
+            echo "⚠️ sudo not available, skipping service reload (may need manual restart)"
+          fi
+
+          echo "🧹 Cleanup"
+          rm -rf "/tmp/deploy-${TIMESTAMP}"
+
+          cd releases
+          ls -t | tail -n +4 | xargs -r rm -rf
+
+          echo "✅ Deployment complete"
+
+      # Disable maintenance mode
+      - name: Disable Maintenance Mode
+        run: |
+          cd ${{ secrets.PROD_PATH }}/current
+          php artisan up
+          echo "✅ Maintenance mode disabled"
+
+      # Health checks (optional - won't fail deployment)
+      - name: Health Check
+        id: health
+        continue-on-error: true
+        run: |
+          echo "🏥 Running health checks..."
+          sleep 10
+
+          HEALTH_URL="${{ secrets.PROD_URL }}/api/health"
+
+          # Skip if PROD_URL is not set
+          if [ -z "${{ secrets.PROD_URL }}" ]; then
+            echo "⚠️ PROD_URL not configured, skipping health check"
+            echo "passed=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          for i in 1 2 3; do
+            echo "Attempt $i/3..."
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time ${{ env.HEALTH_CHECK_TIMEOUT }} "$HEALTH_URL" || echo "000")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+
+            if [ "$HTTP_CODE" == "200" ]; then
+              echo "✅ Health check passed"
+              echo "passed=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "⚠️ Health check failed after 3 attempts (deployment still successful)"
+          echo "passed=false" >> $GITHUB_OUTPUT
+
+      # Rollback on failure
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          cd ${{ secrets.PROD_PATH }}
+
+          # Get previous release
+          PREVIOUS=""
+          if [ -f "shared/.previous_release" ]; then
+            PREVIOUS=$(cat shared/.previous_release)
+          fi
+
+          if [ -z "$PREVIOUS" ]; then
+            PREVIOUS=$(ls -t releases | sed -n '2p')
+            if [ -n "$PREVIOUS" ]; then
+              PREVIOUS="$(pwd)/releases/${PREVIOUS}"
+            fi
+          fi
+
+          if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+            echo "🔙 Rolling back to: ${PREVIOUS}"
+            ln -sfn "$PREVIOUS" current.new
+            mv -Tf current.new current
+
+            cd current
+            php artisan up
+
+            if sudo -n true 2>/dev/null; then
+              sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.2-fpm || true
+              sudo nginx -s reload || true
+            fi
+
+            echo "✅ Rollback complete"
+          else
+            echo "❌ No previous release for rollback"
+            cd current 2>/dev/null && php artisan up || true
+          fi
