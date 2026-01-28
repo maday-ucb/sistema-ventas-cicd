@@ -1,18 +1,22 @@
 name: Deploy to Staging (Tailscale)
 
 on:
-  # Trigger after successful build on develop
+  # Trigger after successful build on main
   workflow_run:
     workflows: ["Build & Release"]
     types: [completed]
-    branches: [develop]
+    branches: [main]
+
+  # Trigger on push to main
+  push:
+    branches: [main]
 
   # Manual trigger
   workflow_dispatch:
     inputs:
       release_tag:
         description: "Release tag to deploy (e.g., v1.0.0-develop-20260114-164500)"
-        required: true
+        required: false
 
 concurrency:
   group: deploy-staging-tailscale
@@ -21,6 +25,7 @@ concurrency:
 env:
   ENVIRONMENT: staging
   HEALTH_CHECK_TIMEOUT: 30
+  DEPLOY_ID: ${{ github.run_id }}
 
 jobs:
   deploy:
@@ -28,7 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop')
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') ||
+      github.event_name == 'push'
     environment: staging
     steps:
       - name: Checkout Repository
@@ -48,8 +54,8 @@ jobs:
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then
             RELEASE_TAG="${{ github.event.inputs.release_tag }}"
           else
-            # Get latest release from develop
-            RELEASE_TAG=$(gh release list --limit 10 | grep -E 'develop' | head -1 | awk '{print $1}' || echo "")
+            # Get latest release from main
+            RELEASE_TAG=$(gh release list --limit 10 | grep -E 'main' | head -1 | awk '{print $1}' || echo "")
             if [ -z "$RELEASE_TAG" ]; then
               echo "No release found for develop branch"
               exit 1
@@ -104,7 +110,35 @@ jobs:
             fi
             echo ".env file exists"
 
+            # Ensure tmp directory
+            mkdir -p "${{ secrets.STAGING_PATH }}/tmp/deploy-${{ env.DEPLOY_ID }}"
+
             echo "All pre-deploy checks passed"
+
+      - name: Download Release Artifact
+        run: |
+          set -e
+          RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
+          ARTIFACT_NAME="sistema-ventas-${RELEASE_TAG}"
+          mkdir -p "/tmp/deploy-${{ env.DEPLOY_ID }}"
+          gh release download "$RELEASE_TAG" --pattern "${ARTIFACT_NAME}.tar.gz" --dir "/tmp/deploy-${{ env.DEPLOY_ID }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare SSH Key for Rsync
+        run: |
+          set -e
+          printf "%s" "${{ secrets.STAGING_SSH_KEY }}" > "$RUNNER_TEMP/staging_key"
+          chmod 600 "$RUNNER_TEMP/staging_key"
+
+      - name: Rsync Artifact to Staging
+        run: |
+          set -e
+          RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
+          ARTIFACT_NAME="sistema-ventas-${RELEASE_TAG}"
+          rsync -az -e "ssh -p ${{ secrets.STAGING_SSH_PORT }} -i $RUNNER_TEMP/staging_key -o StrictHostKeyChecking=no" \
+            "/tmp/deploy-${{ env.DEPLOY_ID }}/${ARTIFACT_NAME}.tar.gz" \
+            "${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:${{ secrets.STAGING_PATH }}/tmp/deploy-${{ env.DEPLOY_ID }}/"
 
       # Deploy using script
       - name: Deploy Application
@@ -122,19 +156,16 @@ jobs:
             RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
             RELEASE_DIR="releases/${TIMESTAMP}"
+            REMOTE_TMP="${{ secrets.STAGING_PATH }}/tmp/deploy-${{ env.DEPLOY_ID }}"
 
-            echo "Downloading release: ${RELEASE_TAG}"
+            echo "Using rsynced release: ${RELEASE_TAG}"
 
-            # Download artifact
+            # Artifact name
             ARTIFACT_NAME="sistema-ventas-${RELEASE_TAG}"
-            DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${ARTIFACT_NAME}.tar.gz"
-
-            mkdir -p "/tmp/deploy-${TIMESTAMP}"
-            curl -fsSL -o "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz" "$DOWNLOAD_URL"
 
             echo "Extracting to ${RELEASE_DIR}"
             mkdir -p "${RELEASE_DIR}"
-            tar -xzf "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz" -C "${RELEASE_DIR}"
+            tar -xzf "${REMOTE_TMP}/${ARTIFACT_NAME}.tar.gz" -C "${RELEASE_DIR}"
 
             echo "Creating symlinks"
             rm -rf "${RELEASE_DIR}/storage"
@@ -164,6 +195,7 @@ jobs:
 
             echo "Running migrations"
             cd "${RELEASE_DIR}"
+            php artisan optimize:clear
             php artisan migrate --force
 
             echo "Atomic switch"
@@ -177,7 +209,7 @@ jobs:
             sudo supervisorctl restart sistema-ventas-worker:* 2>/dev/null || true
 
             echo "Cleanup"
-            rm -rf "/tmp/deploy-${TIMESTAMP}"
+            rm -rf "${REMOTE_TMP}"
 
             # Keep only last 3 releases
             cd releases
