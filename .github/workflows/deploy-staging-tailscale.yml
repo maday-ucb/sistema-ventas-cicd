@@ -132,7 +132,7 @@ jobs:
           if echo "$KEY_CONTENT" | head -c 4 | grep -q "LS0t"; then
             echo "$KEY_CONTENT" | tr -d '\r' | base64 -d > "$RUNNER_TEMP/staging_key"
           else
-            printf "%s" "$KEY_CONTENT" | tr -d '\r' > "$RUNNER_TEMP/staging_key"
+            printf "%b" "$KEY_CONTENT" | tr -d '\r' > "$RUNNER_TEMP/staging_key"
           fi
           chmod 600 "$RUNNER_TEMP/staging_key"
 
