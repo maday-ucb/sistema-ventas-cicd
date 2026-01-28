@@ -57,7 +57,7 @@ jobs:
             # Get latest release from main
             RELEASE_TAG=$(gh release list --limit 10 | grep -E 'main' | head -1 | awk '{print $1}' || echo "")
             if [ -z "$RELEASE_TAG" ]; then
-              echo "No release found for develop branch"
+              echo "No release found for main branch"
               exit 1
             fi
           fi
@@ -128,7 +128,12 @@ jobs:
       - name: Prepare SSH Key for Rsync
         run: |
           set -e
-          printf "%s" "${{ secrets.STAGING_SSH_KEY }}" | tr -d '\r' > "$RUNNER_TEMP/staging_key"
+          KEY_CONTENT="${{ secrets.STAGING_SSH_KEY }}"
+          if echo "$KEY_CONTENT" | head -c 4 | grep -q "LS0t"; then
+            echo "$KEY_CONTENT" | tr -d '\r' | base64 -d > "$RUNNER_TEMP/staging_key"
+          else
+            printf "%s" "$KEY_CONTENT" | tr -d '\r' > "$RUNNER_TEMP/staging_key"
+          fi
           chmod 600 "$RUNNER_TEMP/staging_key"
 
       - name: Rsync Artifact to Staging
