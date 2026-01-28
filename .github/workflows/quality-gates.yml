@@ -45,17 +45,21 @@ jobs:
       - name: "Gate 1: Code Style (Laravel Pint)"
         run: ./vendor/bin/pint --test
 
+      # Paso 6: GATE 2 - Análisis estático con PHPStan
+      - name: "Gate 2: Static Analysis (PHPStan)"
+        run: ./vendor/bin/phpstan analyse --memory-limit=1G
+
       - name: Setup Test Environment
         run: |
           cp .env.example .env
           php artisan key:generate
           touch database/database.sqlite
 
-      - name: "Gate 2: Security Audit (Composer)"
+      - name: "Gate 3: Security Audit (Composer)"
         run: composer audit
 
       # PHPUnit con coverage mínimo del 80%
-      - name: "Gate 3: PHPUnit Tests with Coverage"
+      - name: "Gate 4: PHPUnit Tests with Coverage"
         run: |
           php artisan test --coverage-text --coverage-clover=coverage.xml
         env:
