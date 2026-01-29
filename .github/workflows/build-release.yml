@@ -163,6 +163,8 @@ jobs:
             --exclude='vitest.config.js' \
             --exclude='eslint.config.js' \
             --exclude='.claude' \
+            --exclude='*.tar.gz' \
+            --exclude='*.sha256' \
             -czf "${ARTIFACT_NAME}.tar.gz" \
             .
 
