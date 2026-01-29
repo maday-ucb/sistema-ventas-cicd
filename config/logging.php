@@ -130,7 +130,7 @@ return [
         'audit' => [
             'driver' => 'daily',
             'path' => storage_path('logs/audit.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => 'debug',  // Siempre registra todo, independiente del LOG_LEVEL global
             'days' => env('LOG_AUDIT_DAYS', 90),
             'replace_placeholders' => true,
         ],
