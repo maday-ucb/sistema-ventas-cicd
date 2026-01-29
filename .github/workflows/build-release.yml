@@ -144,7 +144,8 @@ jobs:
           ARTIFACT_NAME="sistema-ventas-${SAFE_NAME}"
 
           # Create tar.gz excluding unnecessary files
-          tar --exclude='node_modules' \
+          tar --ignore-failed-read \
+            --exclude='node_modules' \
             --exclude='.git' \
             --exclude='.env' \
             --exclude='.env.local' \
