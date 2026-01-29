@@ -138,11 +138,13 @@ jobs:
       # Create release artifact
       - name: Create Release Artifact
         run: |
-          ARTIFACT_NAME="sistema-ventas-${{ steps.version.outputs.release_name }}"
+          RELEASE_NAME="${{ steps.version.outputs.release_name }}"
+          # Sanitize release name to remove invalid filename characters
+          SAFE_NAME=$(echo "$RELEASE_NAME" | sed 's/[\/:]/-/g')
+          ARTIFACT_NAME="sistema-ventas-${SAFE_NAME}"
 
           # Create tar.gz excluding unnecessary files
-          # Create tar.gz excluding unnecessary files
-          tar -czf "${ARTIFACT_NAME}.tar.gz" \
+          tar --ignore-failed-read \
             --exclude='node_modules' \
             --exclude='.git' \
             --exclude='.env' \
@@ -162,7 +164,10 @@ jobs:
             --exclude='vitest.config.js' \
             --exclude='eslint.config.js' \
             --exclude='.claude' \
-            . || [[ $? -eq 1 ]]
+            --exclude='*.tar.gz' \
+            --exclude='*.sha256' \
+            -czf "${ARTIFACT_NAME}.tar.gz" \
+            .
 
           # Generate checksum
           sha256sum "${ARTIFACT_NAME}.tar.gz" > "${ARTIFACT_NAME}.tar.gz.sha256"

@@ -120,14 +120,16 @@ jobs:
             cd ${{ secrets.STAGING_PATH }}
 
             RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
+            # Sanitize release name to match what was created in build
+            SAFE_NAME=$(echo "$RELEASE_TAG" | sed 's/[\/:]/-/g')
             TIMESTAMP=$(date +%Y%m%d-%H%M%S)
             RELEASE_DIR="releases/${TIMESTAMP}"
 
-            echo "Downloading release: ${RELEASE_TAG}"
+            echo "Downloading release: ${RELEASE_TAG} (Safe: ${SAFE_NAME})"
 
             # Download artifact
-            ARTIFACT_NAME="sistema-ventas-${RELEASE_TAG}"
-            DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${ARTIFACT_NAME}.tar.gz"
+            ARTIFACT_NAME="sistema-ventas-${SAFE_NAME}"
+            DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${SAFE_NAME}/${ARTIFACT_NAME}.tar.gz"
 
             mkdir -p "/tmp/deploy-${TIMESTAMP}"
             curl -fsSL -o "/tmp/deploy-${TIMESTAMP}/${ARTIFACT_NAME}.tar.gz" "$DOWNLOAD_URL"
