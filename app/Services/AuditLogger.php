@@ -68,11 +68,13 @@ class AuditLogger
         try {
             if (file_exists(base_path('public/version.json'))) {
                 $version = json_decode(file_get_contents(base_path('public/version.json')), true);
+
                 return $version['release'] ?? 'unknown';
             }
         } catch (\Exception $e) {
             // No hacer nada, retornar default
         }
+
         return 'unknown';
     }
 
