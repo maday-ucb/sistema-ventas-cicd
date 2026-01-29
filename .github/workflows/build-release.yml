@@ -141,9 +141,7 @@ jobs:
           ARTIFACT_NAME="sistema-ventas-${{ steps.version.outputs.release_name }}"
 
           # Create tar.gz excluding unnecessary files
-          # Create tar.gz excluding unnecessary files
-          tar -czf "${ARTIFACT_NAME}.tar.gz" \
-            --exclude='node_modules' \
+          tar --exclude='node_modules' \
             --exclude='.git' \
             --exclude='.env' \
             --exclude='.env.local' \
@@ -162,7 +160,8 @@ jobs:
             --exclude='vitest.config.js' \
             --exclude='eslint.config.js' \
             --exclude='.claude' \
-            . || [[ $? -eq 1 ]]
+            -czf "${ARTIFACT_NAME}.tar.gz" \
+            .
 
           # Generate checksum
           sha256sum "${ARTIFACT_NAME}.tar.gz" > "${ARTIFACT_NAME}.tar.gz.sha256"
